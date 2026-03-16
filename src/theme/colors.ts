@@ -12,10 +12,10 @@ export const Colors = {
     textSecondary: "#7D7D7D",
   },
   dark: {
-    wrapper: "#090B10",
+    wrapper: "#262626",
     activeTint: "#f6f6f6",
     inactiveTint: "#939393",
-    imageOverlay: "rgba(0, 0, 0, 0.10)",
+    imageOverlay: "rgba(83, 42, 42, 0.1)",
     toggleBackground: "rgba(9, 11, 16, 0.72)",
     toggleIcon: "#F3F7FF",
     text: "#F3F7FF",
