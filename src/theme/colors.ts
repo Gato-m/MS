@@ -3,8 +3,8 @@ export type AppTheme = "light" | "dark";
 export const Colors = {
   light: {
     wrapper: "#FFFFFF",
-    activeTint: "#e8522c",
-    inactiveTint: "#7D7D7D",
+    activeTint: "#c51117",
+    inactiveTint: "#aaaaaa",
     imageOverlay: "rgba(255, 255, 255, 0)",
     toggleBackground: "rgba(255, 255, 255, 0.7)",
     toggleIcon: "#0B0B0B",
@@ -13,9 +13,9 @@ export const Colors = {
   },
   dark: {
     wrapper: "#090B10",
-    activeTint: "#8CC5FF",
+    activeTint: "#f6f6f6",
     inactiveTint: "#939393",
-    imageOverlay: "rgba(0, 0, 0, 0.42)",
+    imageOverlay: "rgba(0, 0, 0, 0.10)",
     toggleBackground: "rgba(9, 11, 16, 0.72)",
     toggleIcon: "#F3F7FF",
     text: "#F3F7FF",
