@@ -19,7 +19,14 @@ export function ThemeText({
 }: ThemeTextProps) {
   const theme = useAppTheme();
   const fallbackColors = useThemeColors();
-  const textColor = theme?.colors.text ?? fallbackColors.text;
+  const colors = theme?.colors ?? fallbackColors;
+  const isDark = theme?.isDark ?? false;
+  const textColor =
+    variant === "caption"
+      ? isDark
+        ? colors.textSecondary
+        : colors.gray
+      : colors.text;
 
   return (
     <Text style={[styles.base, styles[variant], { color: textColor }, style]}>
@@ -51,6 +58,5 @@ const styles = StyleSheet.create({
   caption: {
     fontSize: 12,
     marginVertical: 6,
-    color: "colors.textSecondary",
   },
 });

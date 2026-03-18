@@ -33,7 +33,7 @@ export function ThemeCard({ children, onPress, style }: ThemeCardProps) {
         styles.card,
         {
           borderBottomWidth: 1,
-          borderBottomColor: colors.inactiveTint,
+          borderBottomColor: isDark ? colors.lightGray : colors.gray,
           // backgroundColor: cardBackground,
           opacity: pressed ? 0.78 : 1,
         },

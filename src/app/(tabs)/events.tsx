@@ -102,10 +102,13 @@ export default function EventsScreen() {
   const [records, setRecords] = useState<AirtableRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string>("");
-  const [isReminderSheetOpen, setIsReminderSheetOpen] = useState(false);
   const [isReminderModalVisible, setIsReminderModalVisible] = useState(false);
+  const [sheetHeight, setSheetHeight] = useState(0);
   const [activeReminderEvent, setActiveReminderEvent] =
     useState<AirtableRecord | null>(null);
+  const [reminderActiveByEvent, setReminderActiveByEvent] = useState<
+    Record<string, boolean>
+  >({});
   const [savedReminderMinutes, setSavedReminderMinutes] = useState<number[]>(
     [],
   );
@@ -113,25 +116,92 @@ export default function EventsScreen() {
     number[]
   >([]);
   const overlayOpacity = useRef(new Animated.Value(0)).current;
-  const sheetTranslateY = useRef(new Animated.Value(40)).current;
+  const sheetTranslateY = useRef(new Animated.Value(320)).current;
 
   const insets = useSafeAreaInsets();
   const theme = useAppTheme();
   const fallback = useThemeColors();
   const colors = theme?.colors ?? fallback;
+  const inactiveEventIconColor = theme?.isDark
+    ? colors.lightGray
+    : colors.inactiveTint;
+  const hiddenSheetOffset = Math.max(sheetHeight + 24, 320);
+
+  const setReminderStateForEvent = (eventId: string, isActive: boolean) => {
+    setReminderActiveByEvent((prev) => {
+      if (!isActive && !prev[eventId]) {
+        return prev;
+      }
+
+      if (!isActive) {
+        const next = { ...prev };
+        delete next[eventId];
+        return next;
+      }
+
+      return { ...prev, [eventId]: true };
+    });
+  };
 
   const closeReminderSheet = () => {
-    setIsReminderSheetOpen(false);
+    overlayOpacity.stopAnimation();
+    sheetTranslateY.stopAnimation();
+
+    Animated.parallel([
+      Animated.timing(overlayOpacity, {
+        toValue: 0,
+        duration: 140,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(sheetTranslateY, {
+        toValue: hiddenSheetOffset,
+        duration: 200,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setIsReminderModalVisible(false);
+        setActiveReminderEvent(null);
+        overlayOpacity.setValue(0);
+        sheetTranslateY.setValue(hiddenSheetOffset);
+      }
+    });
   };
 
   const openReminderSheet = (eventRecord: AirtableRecord) => {
     setIsReminderModalVisible(true);
     setActiveReminderEvent(eventRecord);
     setSelectedReminderMinutes(savedReminderMinutes);
-    setIsReminderSheetOpen(true);
+
+    overlayOpacity.stopAnimation();
+    sheetTranslateY.stopAnimation();
+    overlayOpacity.setValue(0);
+    sheetTranslateY.setValue(hiddenSheetOffset);
+
+    requestAnimationFrame(() => {
+      Animated.parallel([
+        Animated.timing(overlayOpacity, {
+          toValue: 1,
+          duration: 180,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(sheetTranslateY, {
+          toValue: 0,
+          duration: 240,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
   };
 
   const cancelReminderSheet = () => {
+    if (activeReminderEvent) {
+      setReminderStateForEvent(activeReminderEvent.id, false);
+    }
     setSavedReminderMinutes([]);
     setSelectedReminderMinutes([]);
     closeReminderSheet();
@@ -139,10 +209,15 @@ export default function EventsScreen() {
 
   const toggleReminderMinute = (minutes: number) => {
     setSelectedReminderMinutes((prev) => {
-      if (prev.includes(minutes)) {
-        return prev.filter((value) => value !== minutes);
+      const next = prev.includes(minutes)
+        ? prev.filter((value) => value !== minutes)
+        : [...prev, minutes].sort((a, b) => a - b);
+
+      if (activeReminderEvent) {
+        setReminderStateForEvent(activeReminderEvent.id, next.length > 0);
       }
-      return [...prev, minutes].sort((a, b) => a - b);
+
+      return next;
     });
   };
 
@@ -190,6 +265,8 @@ export default function EventsScreen() {
     let skippedCount = 0;
     const eventName = activeReminderEvent.fields.Event ?? "Pasākums";
     const chosenMinutes = [...selectedReminderMinutes].sort((a, b) => a - b);
+
+    setReminderStateForEvent(activeReminderEvent.id, chosenMinutes.length > 0);
 
     for (const minutes of chosenMinutes) {
       const triggerDate = new Date(eventStart.getTime() - minutes * 60 * 1000);
@@ -247,51 +324,6 @@ export default function EventsScreen() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    overlayOpacity.stopAnimation();
-    sheetTranslateY.stopAnimation();
-
-    if (isReminderSheetOpen) {
-      Animated.parallel([
-        Animated.timing(overlayOpacity, {
-          toValue: 1,
-          duration: 180,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.spring(sheetTranslateY, {
-          toValue: 0,
-          damping: 22,
-          stiffness: 260,
-          mass: 0.8,
-          overshootClamping: false,
-          useNativeDriver: true,
-        }),
-      ]).start();
-      return;
-    }
-
-    Animated.parallel([
-      Animated.timing(overlayOpacity, {
-        toValue: 0,
-        duration: 140,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(sheetTranslateY, {
-        toValue: 40,
-        duration: 160,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
-      if (finished) {
-        setIsReminderModalVisible(false);
-        setActiveReminderEvent(null);
-      }
-    });
-  }, [isReminderSheetOpen, overlayOpacity, sheetTranslateY]);
-
   // Unique, sorted date keys
   const dates = [
     ...new Set(records.map((r) => toDateKey(r.fields.Date)).filter(Boolean)),
@@ -329,7 +361,9 @@ export default function EventsScreen() {
                     backgroundColor: active ? colors.activeTint : "transparent",
                     borderColor: active
                       ? colors.activeTint
-                      : colors.inactiveTint,
+                      : theme?.isDark
+                        ? colors.white
+                        : colors.gray,
                   },
                 ]}
               >
@@ -338,7 +372,11 @@ export default function EventsScreen() {
                   style={[
                     styles.dateChipText,
                     {
-                      color: active ? colors.white : colors.textSecondary,
+                      color: active
+                        ? colors.white
+                        : theme?.isDark
+                          ? colors.white
+                          : colors.gray,
                     },
                   ]}
                 >
@@ -404,18 +442,28 @@ export default function EventsScreen() {
                       <Ionicons
                         name="map-outline"
                         size={22}
-                        color={colors.inactiveTint}
+                        color={inactiveEventIconColor}
                       />
                     </Pressable>
                     <Pressable
                       onPress={() => openReminderSheet(item)}
                       hitSlop={8}
-                      style={styles.iconBtn}
+                      style={[
+                        styles.iconBtn,
+                        reminderActiveByEvent[item.id] && [
+                          styles.iconBtnActive,
+                          { backgroundColor: colors.activeTint },
+                        ],
+                      ]}
                     >
                       <MaterialIcons
                         name="alarm"
                         size={24}
-                        color={colors.inactiveTint}
+                        color={
+                          reminderActiveByEvent[item.id]
+                            ? colors.white
+                            : inactiveEventIconColor
+                        }
                       />
                     </Pressable>
                   </View>
@@ -432,7 +480,14 @@ export default function EventsScreen() {
                 {item.fields.Location ? (
                   <ThemeText
                     variant="caption"
-                    style={[styles.eventPlace, { color: colors.textSecondary }]}
+                    style={[
+                      styles.eventPlace,
+                      {
+                        color: theme?.isDark
+                          ? colors.white
+                          : colors.textSecondary,
+                      },
+                    ]}
                   >
                     {item.fields.Location}
                   </ThemeText>
@@ -442,7 +497,6 @@ export default function EventsScreen() {
           )}
         />
       )}
-
       <Modal
         animationType="none"
         transparent
@@ -460,6 +514,12 @@ export default function EventsScreen() {
           </Pressable>
 
           <Animated.View
+            onLayout={(event) => {
+              const nextHeight = event.nativeEvent.layout.height;
+              if (nextHeight > 0 && nextHeight !== sheetHeight) {
+                setSheetHeight(nextHeight);
+              }
+            }}
             style={[
               styles.sheetContainer,
               {
@@ -485,7 +545,6 @@ export default function EventsScreen() {
 
             <View style={styles.sheetTextBlock}>
               <ThemeText
-                variant="body"
                 style={[styles.sheetEventTitle, { color: colors.text }]}
               >
                 {activeReminderEvent?.fields.Event ?? "Pasākums"}
@@ -526,7 +585,7 @@ export default function EventsScreen() {
                       style={[
                         styles.checkboxLabel,
                         {
-                          color: selected ? colors.white : colors.textSecondary,
+                          color: selected ? colors.white : colors.gray,
                         },
                       ]}
                     >
@@ -550,10 +609,7 @@ export default function EventsScreen() {
               >
                 <ThemeText
                   variant="caption"
-                  style={[
-                    styles.sheetButtonText,
-                    { color: colors.textSecondary },
-                  ]}
+                  style={[styles.sheetButtonText, { color: colors.gray }]}
                 >
                   Atcelt
                 </ThemeText>
@@ -602,6 +658,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
     paddingLeft: 0,
+    marginBottom: 10,
   },
   dateChip: {
     borderWidth: 1,
@@ -647,7 +704,6 @@ const styles = StyleSheet.create({
   },
   timeChipText: {
     textAlign: "left",
-    color: "colors.white",
     fontWeight: "700",
   },
   eventTitle: {
@@ -666,6 +722,13 @@ const styles = StyleSheet.create({
   },
   iconBtn: {
     padding: 4,
+  },
+  iconBtnActive: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
   },
   sheetRoot: {
     flex: 1,
@@ -696,14 +759,17 @@ const styles = StyleSheet.create({
   },
   sheetTextBlock: {
     gap: 4,
+    fontSize: 16,
   },
   sheetPrompt: {
     textAlign: "left",
     marginVertical: 0,
+    fontSize: 14,
   },
   sheetEventTitle: {
     textAlign: "left",
     fontWeight: "700",
+    fontSize: 17,
     marginVertical: 0,
     marginBottom: 0,
   },

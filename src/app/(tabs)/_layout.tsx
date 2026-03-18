@@ -88,12 +88,13 @@ export default function TabsLayout() {
           </Animated.View>
         </AnimatedPressable>
         <Tabs
-          initialRouteName="events"
           screenOptions={{
             headerShown: false,
-            tabBarActiveTintColor: theme.activeTint,
-            tabBarInactiveTintColor: theme.inactiveTint,
+            tabBarActiveTintColor: theme.activeTabIcon,
+            tabBarInactiveTintColor: isDark ? theme.lightGray : theme.lightGray,
             tabBarStyle: styles.tabBar,
+            tabBarItemStyle: styles.tabBarItem,
+            tabBarIconStyle: styles.tabBarIcon,
             sceneStyle: styles.scene,
           }}
         >
@@ -167,5 +168,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
     elevation: 0,
     shadowOpacity: 0,
+    height: 85,
+  },
+  tabBarItem: {
+    paddingTop: 6,
+    paddingBottom: 0,
+  },
+  tabBarIcon: {
+    marginTop: -3,
   },
 });
