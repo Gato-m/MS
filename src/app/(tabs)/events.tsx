@@ -1,4 +1,5 @@
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
+import { Image as ExpoImage } from "expo-image";
 import * as Notifications from "expo-notifications";
 import { useEffect, useRef, useState } from "react";
 import { Linking } from "react-native";
@@ -9,6 +10,7 @@ import {
   Easing,
   FlatList,
   Modal,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -33,6 +35,7 @@ type EventFields = {
   Lat?: number;
   Lon?: number;
   GoogleMapsLink?: string;
+  [key: string]: unknown;
 };
 
 type AirtableRecord = {
@@ -68,6 +71,17 @@ function formatChipDate(dateKey: string): string {
     .toUpperCase();
 }
 
+function formatEventSheetDate(dateKey: string): string {
+  if (!dateKey) return "";
+  const [year, month, day] = dateKey.split("-").map(Number);
+  if (!year || !month || !day) return dateKey;
+
+  return new Date(year, month - 1, day).toLocaleDateString("lv-LV", {
+    day: "numeric",
+    month: "long",
+  });
+}
+
 function parseHoursAndMinutes(
   timeStr?: string,
 ): { hours: number; minutes: number } | null {
@@ -96,14 +110,60 @@ function parseEventStart(fields: EventFields): Date | null {
   return new Date(year, month - 1, day, time.hours, time.minutes, 0, 0);
 }
 
+function getEventImageUrl(fields: EventFields): string | null {
+  const directCandidates = [
+    fields.Image,
+    fields.Images,
+    fields.image,
+    fields.images,
+    fields.Photo,
+    fields.Photos,
+    fields.photo,
+    fields.photos,
+  ];
+
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate) {
+      return candidate;
+    }
+
+    if (Array.isArray(candidate)) {
+      const firstItem = candidate[0] as
+        | { url?: string; thumbnails?: { large?: { url?: string } } }
+        | undefined;
+
+      if (firstItem?.url) return firstItem.url;
+      if (firstItem?.thumbnails?.large?.url)
+        return firstItem.thumbnails.large.url;
+    }
+  }
+
+  for (const value of Object.values(fields)) {
+    if (!Array.isArray(value) || value.length === 0) continue;
+
+    const firstItem = value[0] as
+      | { url?: string; thumbnails?: { large?: { url?: string } } }
+      | undefined;
+
+    if (firstItem?.url) return firstItem.url;
+    if (firstItem?.thumbnails?.large?.url)
+      return firstItem.thumbnails.large.url;
+  }
+
+  return null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function EventsScreen() {
   const [records, setRecords] = useState<AirtableRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string>("");
+  const [isEventModalVisible, setIsEventModalVisible] = useState(false);
   const [isReminderModalVisible, setIsReminderModalVisible] = useState(false);
+  const [eventSheetHeight, setEventSheetHeight] = useState(0);
   const [sheetHeight, setSheetHeight] = useState(0);
+  const [activeEvent, setActiveEvent] = useState<AirtableRecord | null>(null);
   const [activeReminderEvent, setActiveReminderEvent] =
     useState<AirtableRecord | null>(null);
   const [reminderActiveByEvent, setReminderActiveByEvent] = useState<
@@ -115,8 +175,11 @@ export default function EventsScreen() {
   const [selectedReminderMinutes, setSelectedReminderMinutes] = useState<
     number[]
   >([]);
+  const eventOverlayOpacity = useRef(new Animated.Value(0)).current;
+  const eventSheetTranslateY = useRef(new Animated.Value(420)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const sheetTranslateY = useRef(new Animated.Value(320)).current;
+  const eventDragStartY = useRef(0);
 
   const insets = useSafeAreaInsets();
   const theme = useAppTheme();
@@ -125,7 +188,25 @@ export default function EventsScreen() {
   const inactiveEventIconColor = theme?.isDark
     ? colors.lightGray
     : colors.inactiveTint;
+  const hiddenEventSheetOffset = Math.max(eventSheetHeight + 24, 420);
   const hiddenSheetOffset = Math.max(sheetHeight + 24, 320);
+
+  const restoreEventSheetPosition = () => {
+    Animated.parallel([
+      Animated.timing(eventOverlayOpacity, {
+        toValue: 1,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(eventSheetTranslateY, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
 
   const setReminderStateForEvent = (eventId: string, isActive: boolean) => {
     setReminderActiveByEvent((prev) => {
@@ -142,6 +223,84 @@ export default function EventsScreen() {
       return { ...prev, [eventId]: true };
     });
   };
+
+  const closeEventSheet = () => {
+    eventOverlayOpacity.stopAnimation();
+    eventSheetTranslateY.stopAnimation();
+
+    Animated.parallel([
+      Animated.timing(eventOverlayOpacity, {
+        toValue: 0,
+        duration: 140,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(eventSheetTranslateY, {
+        toValue: hiddenEventSheetOffset,
+        duration: 220,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setIsEventModalVisible(false);
+        setActiveEvent(null);
+        eventOverlayOpacity.setValue(0);
+        eventSheetTranslateY.setValue(hiddenEventSheetOffset);
+      }
+    });
+  };
+
+  const openEventSheet = (eventRecord: AirtableRecord) => {
+    setIsEventModalVisible(true);
+    setActiveEvent(eventRecord);
+
+    eventOverlayOpacity.stopAnimation();
+    eventSheetTranslateY.stopAnimation();
+    eventOverlayOpacity.setValue(0);
+    eventSheetTranslateY.setValue(hiddenEventSheetOffset);
+
+    requestAnimationFrame(() => {
+      restoreEventSheetPosition();
+    });
+  };
+
+  const eventSheetPanResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        gestureState.dy > 6 &&
+        Math.abs(gestureState.dy) > Math.abs(gestureState.dx),
+      onPanResponderGrant: () => {
+        eventSheetTranslateY.stopAnimation((value) => {
+          eventDragStartY.current = typeof value === "number" ? value : 0;
+        });
+        eventOverlayOpacity.stopAnimation();
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const nextTranslateY = Math.max(
+          0,
+          eventDragStartY.current + gestureState.dy,
+        );
+        const progress = Math.min(nextTranslateY / hiddenEventSheetOffset, 1);
+
+        eventSheetTranslateY.setValue(nextTranslateY);
+        eventOverlayOpacity.setValue(1 - progress);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const shouldClose = gestureState.dy > 120 || gestureState.vy > 0.9;
+
+        if (shouldClose) {
+          closeEventSheet();
+          return;
+        }
+
+        restoreEventSheetPosition();
+      },
+      onPanResponderTerminate: () => {
+        restoreEventSheetPosition();
+      },
+    }),
+  ).current;
 
   const closeReminderSheet = () => {
     overlayOpacity.stopAnimation();
@@ -332,6 +491,144 @@ export default function EventsScreen() {
   const filtered = selectedDate
     ? records.filter((r) => toDateKey(r.fields.Date) === selectedDate)
     : records;
+  const activeEventImageUrl = activeEvent
+    ? getEventImageUrl(activeEvent.fields)
+    : null;
+  const isReminderOverEventSheet =
+    isEventModalVisible && isReminderModalVisible && !!activeEvent;
+
+  const renderReminderSheet = () => (
+    <>
+      <Pressable
+        style={StyleSheet.absoluteFillObject}
+        onPress={closeReminderSheet}
+      >
+        <Animated.View
+          style={[styles.sheetBackdrop, { opacity: overlayOpacity }]}
+        />
+      </Pressable>
+
+      <Animated.View
+        onLayout={(event) => {
+          const nextHeight = event.nativeEvent.layout.height;
+          if (nextHeight > 0 && nextHeight !== sheetHeight) {
+            setSheetHeight(nextHeight);
+          }
+        }}
+        style={[
+          styles.sheetContainer,
+          {
+            marginBottom: 0,
+            backgroundColor: colors.wrapper,
+            borderColor: colors.inactiveTint,
+            transform: [{ translateY: sheetTranslateY }],
+          },
+        ]}
+      >
+        <View style={styles.sheetHeader}>
+          <ThemeText
+            variant="subtitle"
+            style={[styles.sheetTitle, { color: colors.activeTint }]}
+          >
+            Atgādinājums
+          </ThemeText>
+
+          <Pressable onPress={closeReminderSheet} hitSlop={8}>
+            <Ionicons name="close" size={24} color={colors.inactiveTint} />
+          </Pressable>
+        </View>
+
+        <View style={styles.sheetTextBlock}>
+          <ThemeText style={[styles.sheetEventTitle, { color: colors.text }]}>
+            {activeReminderEvent?.fields.Event ?? "Pasākums"}
+          </ThemeText>
+
+          <ThemeText
+            variant="body"
+            style={[styles.sheetPrompt, { color: colors.text }]}
+          >
+            Rādīt atgādinājumu, ka pasākums sāksies pēc:
+          </ThemeText>
+        </View>
+
+        <View style={styles.checkboxRow}>
+          {REMINDER_OPTIONS.map((minutes) => {
+            const selected = selectedReminderMinutes.includes(minutes);
+            return (
+              <Pressable
+                key={minutes}
+                onPress={() => toggleReminderMinute(minutes)}
+                style={[
+                  styles.checkboxOption,
+                  {
+                    borderColor: selected ? colors.activeTint : colors.gray,
+                    backgroundColor: selected
+                      ? colors.activeTint
+                      : "transparent",
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="checkmark"
+                  size={20}
+                  color={selected ? colors.white : colors.gray}
+                />
+                <ThemeText
+                  variant="caption"
+                  style={[
+                    styles.checkboxLabel,
+                    {
+                      color: selected ? colors.white : colors.gray,
+                    },
+                  ]}
+                >
+                  {minutes} min
+                </ThemeText>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <View style={styles.sheetButtonsRow}>
+          <Pressable
+            onPress={cancelReminderSheet}
+            style={[
+              styles.sheetButton,
+              {
+                borderColor: colors.inactiveTint,
+                backgroundColor: "transparent",
+              },
+            ]}
+          >
+            <ThemeText
+              variant="caption"
+              style={[styles.sheetButtonText, { color: colors.gray }]}
+            >
+              Atcelt
+            </ThemeText>
+          </Pressable>
+
+          <Pressable
+            onPress={submitReminder}
+            style={[
+              styles.sheetButton,
+              {
+                borderColor: colors.activeTint,
+                backgroundColor: colors.activeTint,
+              },
+            ]}
+          >
+            <ThemeText
+              variant="caption"
+              style={[styles.sheetButtonText, { color: colors.white }]}
+            >
+              Apstiprināt
+            </ThemeText>
+          </Pressable>
+        </View>
+      </Animated.View>
+    </>
+  );
 
   return (
     <View
@@ -408,7 +705,7 @@ export default function EventsScreen() {
             </ThemeText>
           }
           renderItem={({ item }) => (
-            <ThemeCard onPress={() => {}}>
+            <ThemeCard onPress={() => openEventSheet(item)}>
               <View style={styles.cardBody}>
                 {/* Top row: time chip left · icons right */}
                 <View style={styles.cardBottomRow}>
@@ -500,141 +797,244 @@ export default function EventsScreen() {
       <Modal
         animationType="none"
         transparent
-        visible={isReminderModalVisible}
-        onRequestClose={closeReminderSheet}
+        visible={isEventModalVisible}
+        onRequestClose={closeEventSheet}
       >
         <View style={styles.sheetRoot}>
           <Pressable
             style={StyleSheet.absoluteFillObject}
-            onPress={closeReminderSheet}
+            onPress={closeEventSheet}
           >
             <Animated.View
-              style={[styles.sheetBackdrop, { opacity: overlayOpacity }]}
+              style={[styles.sheetBackdrop, { opacity: eventOverlayOpacity }]}
             />
           </Pressable>
 
           <Animated.View
             onLayout={(event) => {
               const nextHeight = event.nativeEvent.layout.height;
-              if (nextHeight > 0 && nextHeight !== sheetHeight) {
-                setSheetHeight(nextHeight);
+              if (nextHeight > 0 && nextHeight !== eventSheetHeight) {
+                setEventSheetHeight(nextHeight);
               }
             }}
             style={[
-              styles.sheetContainer,
+              styles.eventSheetContainer,
               {
-                marginBottom: 0,
                 backgroundColor: colors.wrapper,
                 borderColor: colors.inactiveTint,
-                transform: [{ translateY: sheetTranslateY }],
+                transform: [{ translateY: eventSheetTranslateY }],
               },
             ]}
           >
-            <View style={styles.sheetHeader}>
-              <ThemeText
-                variant="subtitle"
-                style={[styles.sheetTitle, { color: colors.activeTint }]}
-              >
-                Atgādinājums
-              </ThemeText>
-
-              <Pressable onPress={closeReminderSheet} hitSlop={8}>
-                <Ionicons name="close" size={24} color={colors.inactiveTint} />
-              </Pressable>
+            <View
+              style={styles.eventSheetDragArea}
+              {...eventSheetPanResponder.panHandlers}
+            >
+              <View
+                style={[
+                  styles.eventSheetDragHandle,
+                  { backgroundColor: colors.inactiveTint },
+                ]}
+              />
             </View>
 
-            <View style={styles.sheetTextBlock}>
-              <ThemeText
-                style={[styles.sheetEventTitle, { color: colors.text }]}
-              >
-                {activeReminderEvent?.fields.Event ?? "Pasākums"}
-              </ThemeText>
+            <ScrollView
+              bounces={false}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.eventSheetScrollContent}
+            >
+              {activeEventImageUrl ? (
+                <View style={styles.eventSheetImageCard}>
+                  <ExpoImage
+                    source={{ uri: activeEventImageUrl }}
+                    style={styles.eventSheetImage}
+                    contentFit="cover"
+                  />
 
-              <ThemeText
-                variant="body"
-                style={[styles.sheetPrompt, { color: colors.text }]}
-              >
-                Rādīt atgādinājumu, ka pasākums sāksies pēc:
-              </ThemeText>
-            </View>
-
-            <View style={styles.checkboxRow}>
-              {REMINDER_OPTIONS.map((minutes) => {
-                const selected = selectedReminderMinutes.includes(minutes);
-                return (
                   <Pressable
-                    key={minutes}
-                    onPress={() => toggleReminderMinute(minutes)}
+                    onPress={closeEventSheet}
+                    hitSlop={8}
                     style={[
-                      styles.checkboxOption,
-                      {
-                        borderColor: selected ? colors.activeTint : colors.gray,
-                        backgroundColor: selected
-                          ? colors.activeTint
-                          : "transparent",
-                      },
+                      styles.eventSheetClose,
+                      { backgroundColor: colors.wrapper + "E6" },
                     ]}
                   >
                     <Ionicons
-                      name="checkmark"
-                      size={20}
-                      color={selected ? colors.white : colors.gray}
+                      name="close"
+                      size={22}
+                      color={colors.inactiveTint}
                     />
-                    <ThemeText
-                      variant="caption"
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {!activeEventImageUrl ? (
+                <Pressable
+                  onPress={closeEventSheet}
+                  hitSlop={8}
+                  style={[
+                    styles.eventSheetCloseFallback,
+                    { backgroundColor: colors.wrapper + "E6" },
+                  ]}
+                >
+                  <Ionicons
+                    name="close"
+                    size={22}
+                    color={colors.inactiveTint}
+                  />
+                </Pressable>
+              ) : null}
+
+              <View style={styles.eventSheetBody}>
+                <View style={styles.cardBottomRow}>
+                  <View style={styles.eventSheetChipsRow}>
+                    {toDateKey(activeEvent?.fields.Date) ? (
+                      <View
+                        style={[
+                          styles.timeChip,
+                          { backgroundColor: colors.activeTint },
+                        ]}
+                      >
+                        <ThemeText
+                          variant="caption"
+                          style={[styles.timeChipText, { color: colors.white }]}
+                        >
+                          {formatEventSheetDate(
+                            toDateKey(activeEvent?.fields.Date),
+                          )}
+                        </ThemeText>
+                      </View>
+                    ) : null}
+
+                    {activeEvent?.fields.Time ? (
+                      <View
+                        style={[
+                          styles.timeChip,
+                          { backgroundColor: colors.activeTint },
+                        ]}
+                      >
+                        <ThemeText
+                          variant="caption"
+                          style={[styles.timeChipText, { color: colors.white }]}
+                        >
+                          {activeEvent.fields.Time}
+                        </ThemeText>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  {!toDateKey(activeEvent?.fields.Date) &&
+                  !activeEvent?.fields.Time ? (
+                    <View />
+                  ) : null}
+
+                  <View style={styles.cardIcons}>
+                    <Pressable
+                      onPress={() => {
+                        const url = activeEvent?.fields.GoogleMapsLink;
+                        if (url) Linking.openURL(url);
+                      }}
+                      hitSlop={8}
+                      style={styles.iconBtn}
+                    >
+                      <Ionicons
+                        name="map-outline"
+                        size={22}
+                        color={inactiveEventIconColor}
+                      />
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        if (!activeEvent) return;
+                        openReminderSheet(activeEvent);
+                      }}
+                      hitSlop={8}
                       style={[
-                        styles.checkboxLabel,
-                        {
-                          color: selected ? colors.white : colors.gray,
-                        },
+                        styles.iconBtn,
+                        activeEvent &&
+                          reminderActiveByEvent[activeEvent.id] && [
+                            styles.iconBtnActive,
+                            { backgroundColor: colors.activeTint },
+                          ],
                       ]}
                     >
-                      {minutes} min
-                    </ThemeText>
-                  </Pressable>
-                );
-              })}
-            </View>
+                      <MaterialIcons
+                        name="alarm"
+                        size={24}
+                        color={
+                          activeEvent && reminderActiveByEvent[activeEvent.id]
+                            ? colors.white
+                            : inactiveEventIconColor
+                        }
+                      />
+                    </Pressable>
+                  </View>
+                </View>
 
-            <View style={styles.sheetButtonsRow}>
-              <Pressable
-                onPress={cancelReminderSheet}
-                style={[
-                  styles.sheetButton,
-                  {
-                    borderColor: colors.inactiveTint,
-                    backgroundColor: "transparent",
-                  },
-                ]}
-              >
                 <ThemeText
-                  variant="caption"
-                  style={[styles.sheetButtonText, { color: colors.gray }]}
+                  variant="subtitle"
+                  style={[
+                    styles.eventTitle,
+                    styles.eventSheetTitle,
+                    { color: colors.text },
+                  ]}
                 >
-                  Atcelt
+                  {activeEvent?.fields.Event ?? ""}
                 </ThemeText>
-              </Pressable>
 
-              <Pressable
-                onPress={submitReminder}
-                style={[
-                  styles.sheetButton,
-                  {
-                    borderColor: colors.activeTint,
-                    backgroundColor: colors.activeTint,
-                  },
-                ]}
-              >
-                <ThemeText
-                  variant="caption"
-                  style={[styles.sheetButtonText, { color: colors.white }]}
+                {activeEvent?.fields.Location ? (
+                  <ThemeText
+                    variant="caption"
+                    style={[
+                      styles.eventPlace,
+                      {
+                        color: theme?.isDark
+                          ? colors.white
+                          : colors.textSecondary,
+                      },
+                    ]}
+                  >
+                    {activeEvent.fields.Location}
+                  </ThemeText>
+                ) : null}
+
+                <View
+                  style={[
+                    styles.mapPlaceholder,
+                    {
+                      borderColor: colors.gray,
+                      backgroundColor: theme?.isDark
+                        ? "rgba(255,255,255,0.04)"
+                        : "rgba(0,0,0,0.03)",
+                    },
+                  ]}
                 >
-                  Apstiprināt
-                </ThemeText>
-              </Pressable>
-            </View>
+                  <Ionicons name="map-outline" size={22} color={colors.gray} />
+                  <ThemeText
+                    variant="caption"
+                    style={[styles.mapPlaceholderText, { color: colors.gray }]}
+                  >
+                    Kartes vietturis
+                  </ThemeText>
+                </View>
+              </View>
+            </ScrollView>
           </Animated.View>
+
+          {isReminderOverEventSheet ? (
+            <View style={styles.inlineReminderLayer}>
+              {renderReminderSheet()}
+            </View>
+          ) : null}
         </View>
+      </Modal>
+      <Modal
+        animationType="none"
+        transparent
+        visible={isReminderModalVisible && !isReminderOverEventSheet}
+        onRequestClose={closeReminderSheet}
+      >
+        <View style={styles.sheetRoot}>{renderReminderSheet()}</View>
       </Modal>
     </View>
   );
@@ -746,6 +1146,87 @@ const styles = StyleSheet.create({
     paddingVertical: 30,
     gap: 12,
   },
+  eventSheetContainer: {
+    maxHeight: "92%",
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderTopWidth: 1,
+    overflow: "hidden",
+  },
+  eventSheetDragArea: {
+    alignItems: "center",
+    paddingTop: 10,
+    paddingBottom: 2,
+  },
+  eventSheetDragHandle: {
+    width: 44,
+    height: 5,
+    borderRadius: 999,
+    opacity: 0.7,
+  },
+  eventSheetScrollContent: {
+    paddingHorizontal: 26,
+    paddingTop: 12,
+    paddingBottom: 26,
+  },
+  eventSheetImageCard: {
+    borderRadius: 18,
+    overflow: "hidden",
+    position: "relative",
+  },
+  eventSheetImage: {
+    width: "100%",
+    height: 220,
+    borderRadius: 18,
+  },
+  eventSheetClose: {
+    position: "absolute",
+    top: 14,
+    right: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2,
+  },
+  eventSheetCloseFallback: {
+    position: "absolute",
+    top: 14,
+    right: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2,
+  },
+  eventSheetBody: {
+    paddingTop: 22,
+    gap: 12,
+  },
+  eventSheetChipsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  eventSheetTitle: {
+    marginTop: 0,
+  },
+  mapPlaceholder: {
+    minHeight: 160,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  mapPlaceholderText: {
+    marginVertical: 0,
+  },
   sheetHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -809,5 +1290,9 @@ const styles = StyleSheet.create({
     marginVertical: 0,
     fontSize: 13,
     fontWeight: "700",
+  },
+  inlineReminderLayer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "flex-end",
   },
 });

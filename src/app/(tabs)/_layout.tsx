@@ -65,10 +65,6 @@ export default function TabsLayout() {
             { width: bgWidth, height: screenHeight },
           ]}
         />
-        <View
-          pointerEvents="none"
-          style={[styles.imageOverlay, { backgroundColor: theme.imageOverlay }]}
-        />
         <AnimatedPressable
           onPress={toggleTheme}
           style={[
@@ -145,9 +141,6 @@ const styles = StyleSheet.create({
     left: 0,
     bottom: 10,
     resizeMode: "cover",
-  },
-  imageOverlay: {
-    ...StyleSheet.absoluteFillObject,
   },
   toggle: {
     position: "absolute",
