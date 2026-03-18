@@ -19,14 +19,12 @@ type ThemeCardProps = {
 export function ThemeCard({ children, onPress, style }: ThemeCardProps) {
   const theme = useAppTheme();
   const fallbackColors = useThemeColors();
+  const colors = theme?.colors ?? fallbackColors;
   const isDark = theme?.isDark ?? false;
 
   //   const cardBackground = isDark
   //     ? "rgba(20, 24, 38, 0.82)"
   //     : "rgba(255, 255, 255, 0.9)";
-  //   const cardBorder = isDark
-  //     ? "rgba(255, 255, 255, 0.07)"
-  //     : "rgba(0, 0, 0, 0.07)";
 
   return (
     <Pressable
@@ -34,8 +32,9 @@ export function ThemeCard({ children, onPress, style }: ThemeCardProps) {
       style={({ pressed }) => [
         styles.card,
         {
+          borderBottomWidth: 1,
+          borderBottomColor: colors.inactiveTint,
           // backgroundColor: cardBackground,
-          // borderColor: cardBorder,
           opacity: pressed ? 0.78 : 1,
         },
         style,
@@ -48,9 +47,9 @@ export function ThemeCard({ children, onPress, style }: ThemeCardProps) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 18,
+    // borderRadius: 18,
     borderWidth: 0,
-    padding: 14,
-    marginBottom: 10,
+    paddingVertical: 5,
+    marginBottom: 0,
   },
 });

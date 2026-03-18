@@ -33,9 +33,10 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: "700",
     marginBottom: 8,
+    textAlign: "left",
   },
   subtitle: {
     fontSize: 18,

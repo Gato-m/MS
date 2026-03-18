@@ -1,4 +1,4 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import { Linking } from "react-native";
 import {
@@ -86,46 +86,51 @@ export default function EventsScreen() {
     : records;
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top + 16 }]}>
+    <View
+      style={[styles.screen, { paddingTop: insets.top, paddingHorizontal: 25 }]}
+    >
       {/* Screen title */}
       <ThemeText variant="title" style={styles.screenTitle}>
         Pasākumi
       </ThemeText>
 
       {/* Date chips */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsRow}
-        style={styles.chipsScroll}
-      >
-        {dates.map((date) => {
-          const active = selectedDate === date;
-          return (
-            <Pressable
-              key={date}
-              onPress={() => setSelectedDate(date)}
-              style={[
-                styles.dateChip,
-                {
-                  backgroundColor: active ? colors.activeTint : "transparent",
-                  borderColor: active ? colors.activeTint : colors.inactiveTint,
-                },
-              ]}
-            >
-              <ThemeText
-                variant="caption"
-                style={{
-                  color: active ? "#FFFFFF" : colors.textSecondary,
-                  textAlign: "center",
-                }}
+      <View style={styles.chipsScroll}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipsRow}
+        >
+          {dates.map((date) => {
+            const active = selectedDate === date;
+            return (
+              <Pressable
+                key={date}
+                onPress={() => setSelectedDate(date)}
+                style={[
+                  styles.dateChip,
+                  {
+                    backgroundColor: active ? colors.activeTint : "transparent",
+                    borderColor: active
+                      ? colors.activeTint
+                      : colors.inactiveTint,
+                  },
+                ]}
               >
-                {formatChipDate(date)}
-              </ThemeText>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+                <ThemeText
+                  variant="caption"
+                  style={{
+                    color: active ? colors.white : colors.textSecondary,
+                    textAlign: "center",
+                  }}
+                >
+                  {formatChipDate(date)}
+                </ThemeText>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       {/* Events list */}
       {loading ? (
@@ -138,6 +143,7 @@ export default function EventsScreen() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
+          style={styles.flatList}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
@@ -147,80 +153,72 @@ export default function EventsScreen() {
           }
           renderItem={({ item }) => (
             <ThemeCard onPress={() => {}}>
-              <View style={styles.cardRow}>
-                {/* Left: time chip + title + place */}
-                <View style={styles.cardLeft}>
+              <View style={styles.cardBody}>
+                {/* Top row: time chip left · icons right */}
+                <View style={styles.cardBottomRow}>
                   {item.fields.Time ? (
                     <View
                       style={[
                         styles.timeChip,
-                        { backgroundColor: colors.activeTint + "28" },
+                        { backgroundColor: colors.activeTint },
                       ]}
                     >
                       <ThemeText
                         variant="caption"
-                        style={[
-                          styles.timeChipText,
-                          { color: colors.activeTint },
-                        ]}
+                        style={[styles.timeChipText, { color: colors.white }]}
                       >
                         {item.fields.Time}
                       </ThemeText>
                     </View>
-                  ) : null}
+                  ) : (
+                    <View />
+                  )}
 
-                  <ThemeText
-                    variant="subtitle"
-                    style={[styles.eventTitle, { color: colors.text }]}
-                  >
-                    {item.fields.Event ?? ""}
-                  </ThemeText>
-
-                  {item.fields.Location ? (
-                    <ThemeText
-                      variant="caption"
-                      style={[
-                        styles.eventPlace,
-                        { color: colors.textSecondary },
-                      ]}
+                  <View style={styles.cardIcons}>
+                    <Pressable
+                      onPress={() => {
+                        const url = item.fields.GoogleMapsLink;
+                        if (url) Linking.openURL(url);
+                      }}
+                      hitSlop={8}
+                      style={styles.iconBtn}
                     >
-                      {item.fields.Location}
-                    </ThemeText>
-                  ) : null}
+                      <Ionicons
+                        name="map-outline"
+                        size={22}
+                        color={colors.inactiveTint}
+                      />
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {}}
+                      hitSlop={8}
+                      style={styles.iconBtn}
+                    >
+                      <MaterialIcons
+                        name="alarm"
+                        size={24}
+                        color={colors.inactiveTint}
+                      />
+                    </Pressable>
+                  </View>
                 </View>
 
-                {/* Right: map + time icons */}
-                <View style={styles.cardIcons}>
-                  <Pressable
-                    onPress={() => {
-                      const url = item.fields.GoogleMapsLink;
-                      if (url) Linking.openURL(url);
-                    }}
-                    hitSlop={8}
-                    style={styles.iconBtn}
+                {/* Title + place */}
+                <ThemeText
+                  variant="subtitle"
+                  style={[styles.eventTitle, { color: colors.text }]}
+                >
+                  {item.fields.Event ?? ""}
+                </ThemeText>
+
+                {item.fields.Location ? (
+                  <ThemeText
+                    variant="caption"
+                    style={[styles.eventPlace, { color: colors.textSecondary }]}
                   >
-                    <Ionicons
-                      name="map-outline"
-                      size={22}
-                      color={
-                        item.fields.GoogleMapsLink
-                          ? colors.activeTint
-                          : colors.inactiveTint
-                      }
-                    />
-                  </Pressable>
-                  <Pressable
-                    onPress={() => {}}
-                    hitSlop={8}
-                    style={styles.iconBtn}
-                  >
-                    <Ionicons
-                      name="time-outline"
-                      size={22}
-                      color={colors.inactiveTint}
-                    />
-                  </Pressable>
-                </View>
+                    {item.fields.Location}
+                  </ThemeText>
+                ) : null}
               </View>
             </ThemeCard>
           )}
@@ -233,29 +231,33 @@ export default function EventsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    paddingHorizontal: 16,
   },
   screenTitle: {
     textAlign: "left",
-    marginBottom: 12,
+    marginBottom: 16,
+    marginTop: 30,
   },
   // ── Date chips ──
   chipsScroll: {
-    flexGrow: 0,
-    marginBottom: 14,
+    paddingVertical: 0,
+    marginBottom: 10,
   },
   chipsRow: {
     flexDirection: "row",
     gap: 8,
-    paddingRight: 16,
+    paddingLeft: 0,
   },
   dateChip: {
     borderWidth: 1,
     borderRadius: 20,
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 3,
   },
   // ── List ──
+  flatList: {
+    paddingLeft: 0,
+    paddingHorizontal: 0,
+  },
   loader: {
     marginTop: 48,
   },
@@ -267,36 +269,39 @@ const styles = StyleSheet.create({
     marginTop: 48,
   },
   // ── Card internals ──
-  cardRow: {
+  cardBody: {
+    gap: 4,
+    paddingHorizontal: 0,
+  },
+  cardBottomRow: {
     flexDirection: "row",
     alignItems: "center",
-  },
-  cardLeft: {
-    flex: 1,
-    gap: 4,
+    justifyContent: "space-between",
+    marginTop: 8,
   },
   timeChip: {
     alignSelf: "flex-start",
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    marginBottom: 2,
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 1,
   },
   timeChipText: {
     textAlign: "left",
+    color: "colors.white",
   },
   eventTitle: {
     textAlign: "left",
     marginBottom: 0,
+    marginTop: 5,
   },
   eventPlace: {
     textAlign: "left",
+    marginTop: 0,
   },
   cardIcons: {
-    flexDirection: "column",
+    flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    paddingLeft: 14,
+    gap: 8,
   },
   iconBtn: {
     padding: 4,

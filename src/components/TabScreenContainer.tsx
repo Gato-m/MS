@@ -16,8 +16,9 @@ export function TabScreenContainer({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "center",
     padding: 24,
+    paddingTop: 60,
   },
 });
