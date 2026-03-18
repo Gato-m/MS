@@ -11,6 +11,7 @@ export const Colors = {
     text: "#313131",
     textSecondary: "#353434",
     white: "#FFFFFF",
+    gray: "#808080",
   },
   dark: {
     wrapper: "#262626",
@@ -22,6 +23,7 @@ export const Colors = {
     text: "#F3F7FF",
     textSecondary: "#353535",
     white: "#FFFFFF",
+    gray: "#808080",
   },
 } as const;
 

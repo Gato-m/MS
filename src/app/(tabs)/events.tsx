@@ -1,9 +1,14 @@
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import * as Notifications from "expo-notifications";
+import { useEffect, useRef, useState } from "react";
 import { Linking } from "react-native";
 import {
   ActivityIndicator,
+  Animated,
+  Alert,
+  Easing,
   FlatList,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,6 +40,17 @@ type AirtableRecord = {
   fields: EventFields;
 };
 
+const REMINDER_OPTIONS = [15, 30] as const;
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 function toDateKey(dateStr?: string): string {
   if (!dateStr) return "";
   // Airtable returns ISO "2025-06-05" or "2025-06-05T00:00:00.000Z"
@@ -52,17 +68,172 @@ function formatChipDate(dateKey: string): string {
     .toUpperCase();
 }
 
+function parseHoursAndMinutes(
+  timeStr?: string,
+): { hours: number; minutes: number } | null {
+  if (!timeStr) return null;
+
+  const match = timeStr.trim().match(/(\d{1,2})[:.](\d{2})/);
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+
+  return { hours, minutes };
+}
+
+function parseEventStart(fields: EventFields): Date | null {
+  const dateKey = toDateKey(fields.Date);
+  if (!dateKey) return null;
+
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const time = parseHoursAndMinutes(fields.Time);
+  if (!year || !month || !day || !time) return null;
+
+  return new Date(year, month - 1, day, time.hours, time.minutes, 0, 0);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function EventsScreen() {
   const [records, setRecords] = useState<AirtableRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string>("");
+  const [isReminderSheetOpen, setIsReminderSheetOpen] = useState(false);
+  const [isReminderModalVisible, setIsReminderModalVisible] = useState(false);
+  const [activeReminderEvent, setActiveReminderEvent] =
+    useState<AirtableRecord | null>(null);
+  const [savedReminderMinutes, setSavedReminderMinutes] = useState<number[]>(
+    [],
+  );
+  const [selectedReminderMinutes, setSelectedReminderMinutes] = useState<
+    number[]
+  >([]);
+  const overlayOpacity = useRef(new Animated.Value(0)).current;
+  const sheetTranslateY = useRef(new Animated.Value(40)).current;
 
   const insets = useSafeAreaInsets();
   const theme = useAppTheme();
   const fallback = useThemeColors();
   const colors = theme?.colors ?? fallback;
+
+  const closeReminderSheet = () => {
+    setIsReminderSheetOpen(false);
+  };
+
+  const openReminderSheet = (eventRecord: AirtableRecord) => {
+    setIsReminderModalVisible(true);
+    setActiveReminderEvent(eventRecord);
+    setSelectedReminderMinutes(savedReminderMinutes);
+    setIsReminderSheetOpen(true);
+  };
+
+  const cancelReminderSheet = () => {
+    setSavedReminderMinutes([]);
+    setSelectedReminderMinutes([]);
+    closeReminderSheet();
+  };
+
+  const toggleReminderMinute = (minutes: number) => {
+    setSelectedReminderMinutes((prev) => {
+      if (prev.includes(minutes)) {
+        return prev.filter((value) => value !== minutes);
+      }
+      return [...prev, minutes].sort((a, b) => a - b);
+    });
+  };
+
+  const ensureNotificationPermission = async () => {
+    const current = await Notifications.getPermissionsAsync();
+    let finalStatus = current.status;
+
+    if (finalStatus !== "granted") {
+      const requested = await Notifications.requestPermissionsAsync();
+      finalStatus = requested.status;
+    }
+
+    if (finalStatus !== "granted") {
+      Alert.alert(
+        "Atļauja nepieciešama",
+        "Lai iestatītu atgādinājumu, lūdzu atļauj paziņojumus ierīces iestatījumos.",
+      );
+      return false;
+    }
+
+    return true;
+  };
+
+  const submitReminder = async () => {
+    if (!activeReminderEvent) return;
+
+    if (selectedReminderMinutes.length === 0) {
+      Alert.alert("Izvēlies laiku", "Atzīmē vismaz vienu atgādinājuma laiku.");
+      return;
+    }
+
+    const eventStart = parseEventStart(activeReminderEvent.fields);
+    if (!eventStart) {
+      Alert.alert(
+        "Nav iespējams iestatīt",
+        "Šim pasākumam nav korekta datuma vai laika.",
+      );
+      return;
+    }
+
+    const hasPermission = await ensureNotificationPermission();
+    if (!hasPermission) return;
+
+    let scheduledCount = 0;
+    let skippedCount = 0;
+    const eventName = activeReminderEvent.fields.Event ?? "Pasākums";
+    const chosenMinutes = [...selectedReminderMinutes].sort((a, b) => a - b);
+
+    for (const minutes of chosenMinutes) {
+      const triggerDate = new Date(eventStart.getTime() - minutes * 60 * 1000);
+      if (triggerDate <= new Date()) {
+        skippedCount += 1;
+        continue;
+      }
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "Atgādinājums",
+          body: `${eventName} sāksies pēc ${minutes} min.`,
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: triggerDate,
+        },
+      });
+
+      scheduledCount += 1;
+    }
+
+    setSavedReminderMinutes(chosenMinutes);
+
+    closeReminderSheet();
+
+    if (scheduledCount === 0) {
+      Alert.alert(
+        "Laiks jau pagājis",
+        "Izvēlētie atgādinājuma laiki šim pasākumam vairs nav pieejami.",
+      );
+      return;
+    }
+
+    if (skippedCount > 0) {
+      Alert.alert(
+        "Atgādinājums iestatīts daļēji",
+        "Daļa izvēlēto laiku jau bija pagājusi, tāpēc iestatījām tikai atlikušos.",
+      );
+      return;
+    }
+
+    Alert.alert("Gatavs", "Atgādinājums iestatīts.");
+  };
 
   useEffect(() => {
     Airtable.listEvents()
@@ -75,6 +246,51 @@ export default function EventsScreen() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    overlayOpacity.stopAnimation();
+    sheetTranslateY.stopAnimation();
+
+    if (isReminderSheetOpen) {
+      Animated.parallel([
+        Animated.timing(overlayOpacity, {
+          toValue: 1,
+          duration: 180,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.spring(sheetTranslateY, {
+          toValue: 0,
+          damping: 22,
+          stiffness: 260,
+          mass: 0.8,
+          overshootClamping: false,
+          useNativeDriver: true,
+        }),
+      ]).start();
+      return;
+    }
+
+    Animated.parallel([
+      Animated.timing(overlayOpacity, {
+        toValue: 0,
+        duration: 140,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(sheetTranslateY, {
+        toValue: 40,
+        duration: 160,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setIsReminderModalVisible(false);
+        setActiveReminderEvent(null);
+      }
+    });
+  }, [isReminderSheetOpen, overlayOpacity, sheetTranslateY]);
 
   // Unique, sorted date keys
   const dates = [
@@ -119,10 +335,12 @@ export default function EventsScreen() {
               >
                 <ThemeText
                   variant="caption"
-                  style={{
-                    color: active ? colors.white : colors.textSecondary,
-                    textAlign: "center",
-                  }}
+                  style={[
+                    styles.dateChipText,
+                    {
+                      color: active ? colors.white : colors.textSecondary,
+                    },
+                  ]}
                 >
                   {formatChipDate(date)}
                 </ThemeText>
@@ -190,7 +408,7 @@ export default function EventsScreen() {
                       />
                     </Pressable>
                     <Pressable
-                      onPress={() => {}}
+                      onPress={() => openReminderSheet(item)}
                       hitSlop={8}
                       style={styles.iconBtn}
                     >
@@ -224,6 +442,144 @@ export default function EventsScreen() {
           )}
         />
       )}
+
+      <Modal
+        animationType="none"
+        transparent
+        visible={isReminderModalVisible}
+        onRequestClose={closeReminderSheet}
+      >
+        <View style={styles.sheetRoot}>
+          <Pressable
+            style={StyleSheet.absoluteFillObject}
+            onPress={closeReminderSheet}
+          >
+            <Animated.View
+              style={[styles.sheetBackdrop, { opacity: overlayOpacity }]}
+            />
+          </Pressable>
+
+          <Animated.View
+            style={[
+              styles.sheetContainer,
+              {
+                marginBottom: 0,
+                backgroundColor: colors.wrapper,
+                borderColor: colors.inactiveTint,
+                transform: [{ translateY: sheetTranslateY }],
+              },
+            ]}
+          >
+            <View style={styles.sheetHeader}>
+              <ThemeText
+                variant="subtitle"
+                style={[styles.sheetTitle, { color: colors.activeTint }]}
+              >
+                Atgādinājums
+              </ThemeText>
+
+              <Pressable onPress={closeReminderSheet} hitSlop={8}>
+                <Ionicons name="close" size={24} color={colors.inactiveTint} />
+              </Pressable>
+            </View>
+
+            <View style={styles.sheetTextBlock}>
+              <ThemeText
+                variant="body"
+                style={[styles.sheetEventTitle, { color: colors.text }]}
+              >
+                {activeReminderEvent?.fields.Event ?? "Pasākums"}
+              </ThemeText>
+
+              <ThemeText
+                variant="body"
+                style={[styles.sheetPrompt, { color: colors.text }]}
+              >
+                Rādīt atgādinājumu, ka pasākums sāksies pēc:
+              </ThemeText>
+            </View>
+
+            <View style={styles.checkboxRow}>
+              {REMINDER_OPTIONS.map((minutes) => {
+                const selected = selectedReminderMinutes.includes(minutes);
+                return (
+                  <Pressable
+                    key={minutes}
+                    onPress={() => toggleReminderMinute(minutes)}
+                    style={[
+                      styles.checkboxOption,
+                      {
+                        borderColor: selected ? colors.activeTint : colors.gray,
+                        backgroundColor: selected
+                          ? colors.activeTint
+                          : "transparent",
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="checkmark"
+                      size={20}
+                      color={selected ? colors.white : colors.gray}
+                    />
+                    <ThemeText
+                      variant="caption"
+                      style={[
+                        styles.checkboxLabel,
+                        {
+                          color: selected ? colors.white : colors.textSecondary,
+                        },
+                      ]}
+                    >
+                      {minutes} min
+                    </ThemeText>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <View style={styles.sheetButtonsRow}>
+              <Pressable
+                onPress={cancelReminderSheet}
+                style={[
+                  styles.sheetButton,
+                  {
+                    borderColor: colors.inactiveTint,
+                    backgroundColor: "transparent",
+                  },
+                ]}
+              >
+                <ThemeText
+                  variant="caption"
+                  style={[
+                    styles.sheetButtonText,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  Atcelt
+                </ThemeText>
+              </Pressable>
+
+              <Pressable
+                onPress={submitReminder}
+                style={[
+                  styles.sheetButton,
+                  {
+                    borderColor: colors.activeTint,
+                    backgroundColor: colors.activeTint,
+                  },
+                ]}
+              >
+                <ThemeText
+                  variant="caption"
+                  style={[styles.sheetButtonText, { color: colors.white }]}
+                >
+                  Apstiprināt
+                </ThemeText>
+              </Pressable>
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -252,6 +608,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 3,
+  },
+  dateChipText: {
+    textAlign: "center",
+    fontWeight: "700",
   },
   // ── List ──
   flatList: {
@@ -288,11 +648,12 @@ const styles = StyleSheet.create({
   timeChipText: {
     textAlign: "left",
     color: "colors.white",
+    fontWeight: "700",
   },
   eventTitle: {
     textAlign: "left",
     marginBottom: 0,
-    marginTop: 5,
+    marginTop: 2,
   },
   eventPlace: {
     textAlign: "left",
@@ -305,5 +666,82 @@ const styles = StyleSheet.create({
   },
   iconBtn: {
     padding: 4,
+  },
+  sheetRoot: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0, 0, 0, 0.34)",
+  },
+  sheetContainer: {
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderTopWidth: 1,
+    paddingHorizontal: 26,
+    paddingVertical: 30,
+    gap: 12,
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  sheetTitle: {
+    textAlign: "left",
+    marginBottom: 0,
+    fontSize: 22,
+    fontWeight: "700",
+  },
+  sheetTextBlock: {
+    gap: 4,
+  },
+  sheetPrompt: {
+    textAlign: "left",
+    marginVertical: 0,
+  },
+  sheetEventTitle: {
+    textAlign: "left",
+    fontWeight: "700",
+    marginVertical: 0,
+    marginBottom: 0,
+  },
+  checkboxRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 10,
+    marginTop: 4,
+  },
+  checkboxOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+  },
+  checkboxLabel: {
+    marginVertical: 0,
+    fontWeight: "700",
+  },
+  sheetButtonsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: "auto",
+  },
+  sheetButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  sheetButtonText: {
+    marginVertical: 0,
+    fontSize: 13,
+    fontWeight: "700",
   },
 });
